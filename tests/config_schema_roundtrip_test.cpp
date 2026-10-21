@@ -198,6 +198,7 @@ location = "https://example.invalid/bad"
     bar.position = "bottom";
     bar.enabled = false;
     bar.autoHide = true;
+    bar.autoHideDelayMs = 300000;
     bar.smartAutoHide = false;
     bar.showOnWorkspaceSwitch = true;
     bar.reserveSpace = false;
@@ -273,6 +274,7 @@ location = "https://example.invalid/bad"
     ovr.position = "top";
     ovr.enabled = true;
     ovr.autoHide = false;
+    ovr.autoHideDelayMs = 5000;
     ovr.smartAutoHide = false;
     ovr.showOnWorkspaceSwitch = true;
     ovr.reserveSpace = true;
@@ -364,9 +366,11 @@ location = "https://example.invalid/bad"
     c.osd.monitors = {"DP-1", "HDMI-A-1"};
     c.osd.kinds.lockKeys = false;
     c.osd.kinds.keyboardLayout = false;
+    c.osd.kinds.custom = false;
     c.backdrop = BackdropConfig{true, 0.8F, 0.2F};
     c.lockscreen = LockscreenConfig{
         .lockBeforeSuspend = false,
+        .gracePeriodSeconds = 3,
         .blurredDesktop = true,
         .transitions = {LockscreenTransition::Disc, LockscreenTransition::Zoom},
         .transitionDurationMs = 900.0F,
@@ -509,6 +513,7 @@ location = "https://example.invalid/bad"
     };
     c.accessibility.uiScale = 1.25F;
     c.shell.buttonBorders = false;
+    c.shell.showCloseButtons = false;
     c.shell.fontFamily = "Inter";
     c.shell.lang = "en_US";
     c.shell.timeFormat = "{:%H:%M:%S}";
@@ -525,7 +530,16 @@ location = "https://example.invalid/bad"
     c.shell.panel.transparencyMode = PanelTransparencyMode::Glass;
     c.shell.panel.floatingLayer = "top";
     c.shell.panel.launcherPlacement = PanelPlacement::Floating;
+    c.shell.launcher.layout = ShellConfig::LauncherLayout::Simple;
+    c.shell.launcher.width = 680;
+    c.shell.launcher.searchPosition = ShellConfig::LauncherSearchPosition::Bottom;
+    c.shell.launcher.defaultView = ShellConfig::LauncherDefaultView::Categories;
+    c.shell.launcher.categories = false;
+    c.shell.launcher.categoryIconsOnly = true;
+    c.shell.launcher.showSettingsButton = false;
+    c.shell.launcher.showSessionButton = false;
     c.shell.launcher.compact = true;
+    c.shell.launcher.trackUsage = false;
     c.shell.launcher.sortByUsage = false;
     DmenuEntryConfig notifyDmenu;
     notifyDmenu.id = "notify";
@@ -552,6 +566,7 @@ location = "https://example.invalid/bad"
     c.shell.screenshot.pipeToCommand = true;
     c.shell.screenshot.skipAnnotateOnCopySave = true;
     c.shell.screenshot.closeOnSave = false; // non-default (default is true) so the round-trip exercises it
+    c.shell.screenshot.regionModifier = ScreenshotRegionModifier::Super;
     c.shell.session.actions = {
         SessionPanelActionConfig{
             "lock",
@@ -688,7 +703,7 @@ location = "https://example.invalid/bad"
     // Invalid transition values are surfaced instead of silently changing the
     // configured effect pool.
     {
-      auto t = toml::parse(R"(transition = ["fade", "unknown", 3])");
+      auto t = toml::parse(R"(transition = ["fade", "Fade", "unknown", 3])");
       LockscreenConfig lockscreen{};
       Diagnostics d;
       readInto(t, lockscreen, lockscreenSchema(), "lockscreen", d);
@@ -698,8 +713,26 @@ location = "https://example.invalid/bad"
       const auto warnings = std::ranges::count_if(d.entries, [](const Diagnostics::Entry& entry) {
         return entry.severity == Diagnostics::Severity::Warning && entry.path.starts_with("lockscreen.transition[");
       });
-      if (warnings != 2) {
-        fail("lockscreen.transition: invalid entries were not reported");
+      if (warnings != 3) {
+        fail("lockscreen.transition: invalid or incorrectly-cased entries were not reported");
+      }
+    }
+    // Grace period is strictly opt-in: a config that never mentions the key keeps
+    // requiring authentication, and an explicit 0 stays disabled.
+    {
+      auto t = toml::parse("lock_before_suspend = true");
+      LockscreenConfig lockscreen{};
+      Diagnostics d;
+      readInto(t, lockscreen, lockscreenSchema(), "lockscreen", d);
+      if (lockscreen.gracePeriodSeconds != 0) {
+        fail("lockscreen.grace_period_seconds: missing key must default to 0 (passwordless unlock is opt-in)");
+      }
+      auto explicitZero = toml::parse("grace_period_seconds = 0");
+      LockscreenConfig zero{};
+      Diagnostics dZero;
+      readInto(explicitZero, zero, lockscreenSchema(), "lockscreen", dZero);
+      if (zero.gracePeriodSeconds != 0) {
+        fail("lockscreen.grace_period_seconds: explicit 0 must stay disabled");
       }
     }
     // Clipboard history count accepts large text-heavy histories but still has
@@ -1101,6 +1134,7 @@ int main() {
 
 [default]
 auto_hide = true
+auto_hide_delay_ms = 300000
 background_opacity = 0.85000002384185791
 border = "#123456"
 border_width = 2.0
@@ -1162,6 +1196,7 @@ widget_spacing = 8
 
     [default.monitor.DP-1]
     auto_hide = false
+    auto_hide_delay_ms = 5000
     background_opacity = 0.69999998807907104
     border = "#A1A2A3"
     border_width = 3.0

@@ -368,8 +368,9 @@ public:
     );
   }
 
-  [[nodiscard]] std::optional<TooltipAnchorInsets>
-  itemTooltipAnchorInsets(std::size_t index, float cellWidth, float cellHeight) const override {
+  [[nodiscard]] std::optional<TooltipAnchorInsets> itemTooltipAnchorInsets(
+      std::size_t index, float cellWidth, float cellHeight, bool /*overlayHovered*/
+  ) const override {
     if (m_entries == nullptr || index >= m_entries->size() || (*m_entries)[index].isDir) {
       return std::nullopt;
     }
@@ -605,19 +606,21 @@ void WallpaperPanel::create() {
       })
   );
 
-  toolbar->addChild(
-      ui::button({
-          .out = &m_closeButton,
-          .glyph = "close",
-          .glyphSize = Style::fontSizeBody * scale,
-          .tooltip = i18n::tr("wallpaper.panel.close"),
-          .minWidth = Style::controlHeightSm * scale,
-          .minHeight = Style::controlHeightSm * scale,
-          .padding = Style::spaceXs * scale,
-          .radius = Style::scaledRadiusMd(scale),
-          .onClick = []() { PanelManager::instance().close(); },
-      })
-  );
+  if (Style::closeButtonsEnabled()) {
+    toolbar->addChild(
+        ui::button({
+            .out = &m_closeButton,
+            .glyph = "close",
+            .glyphSize = Style::fontSizeBody * scale,
+            .tooltip = i18n::tr("wallpaper.panel.close"),
+            .minWidth = Style::controlHeightSm * scale,
+            .minHeight = Style::controlHeightSm * scale,
+            .padding = Style::spaceXs * scale,
+            .radius = Style::scaledRadiusMd(scale),
+            .onClick = []() { PanelManager::instance().close(); },
+        })
+    );
+  }
 
   root->addChild(std::move(toolbar));
 

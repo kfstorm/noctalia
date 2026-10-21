@@ -1210,20 +1210,17 @@ void WorkspacesWidget::updateHoverOverlay() {
 
   Item& hoveredItem = *hoveredIt;
 
-  if (!isMinimal()) {
-    for (auto& item : m_items) {
-      if (&item == &hoveredItem) {
-        if (item.indicator != nullptr) {
-          item.indicator->setFill(colorSpecFromRole(ColorRole::Hover));
-        }
-        if (item.text != nullptr) {
-          item.text->setColor(colorSpecFromRole(ColorRole::OnHover));
-        }
-      } else {
-        applyItemVisualStyle(item);
+  for (auto& item : m_items) {
+    if (&item == &hoveredItem) {
+      if (item.indicator != nullptr) {
+        item.indicator->setFill(colorSpecFromRole(ColorRole::Hover));
       }
+      if (item.text != nullptr) {
+        item.text->setColor(colorSpecFromRole(isMinimal() ? ColorRole::Hover : ColorRole::OnHover));
+      }
+    } else {
+      applyItemVisualStyle(item);
     }
-    return;
   }
 
   // Minimal mode uses the translucent overlay
@@ -1522,7 +1519,7 @@ ColorSpec WorkspacesWidget::workspaceTextColor(const Workspace& workspace, wl_ou
   if (workspace.occupied) {
     return m_occupiedColor;
   }
-  ColorSpec color = widgetForegroundOr(colorSpecFromRole(ColorRole::OnSurfaceVariant));
+  ColorSpec color = m_emptyColor;
   color.alpha *= 0.55F;
   return color;
 }

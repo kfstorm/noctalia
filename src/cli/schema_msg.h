@@ -76,8 +76,9 @@ namespace noctalia::cli {
                                                                                       "false", "1",   "0"};
   inline constexpr std::array<std::string_view, 2> kMsgPowerCycleDirectionChoices{"next", "prev"};
   inline constexpr std::array<std::string_view, 3> kMsgScreenshotFullscreenModeChoices{"pick", "monitor", "all"};
-  inline constexpr std::array<std::string_view, 6> kMsgSessionActionChoices{"lock",   "suspend", "lock-and-suspend",
-                                                                            "logout", "reboot",  "shutdown"};
+  inline constexpr std::array<std::string_view, 7> kMsgSessionActionChoices{"lock",    "suspend", "lock-and-suspend",
+                                                                            "logout",  "reboot",  "reboot-uefi",
+                                                                            "shutdown"};
   inline constexpr std::array<std::string_view, 2> kMsgTaskbarCycleDirectionChoices{"next", "prev"};
   inline constexpr std::array<std::string_view, 3> kMsgThemeModeSetModeChoices{"dark", "light", "auto"};
   inline constexpr std::array<std::string_view, 2> kMsgWorkspaceSwitchDirectionChoices{"next", "prev"};
@@ -164,6 +165,10 @@ namespace noctalia::cli {
       Positional{"summary", {}, {}, true, false, false},
       Positional{"body", {}, {}, true, false, true},
   };
+  inline constexpr std::array kMsgOsdShowPositionals{
+      Positional{"icon", {}, {}, true, false, false},
+      Positional{"value", "Text shown next to the icon", {}, false, false, true},
+  };
   inline constexpr std::array kMsgPanelClosePositionals{
       Positional{"id", {}, {}, false, false, false},
   };
@@ -241,8 +246,12 @@ namespace noctalia::cli {
       Positional{"path", {}, {}, true, false, false},
   };
   inline constexpr std::array<std::string_view, 3> kMsgWindowSwitcherActionChoices{"close", "hide", "hold"};
+  inline constexpr std::array<std::string_view, 4> kMsgWindowSwitcherScopeChoices{
+      "all", "output", "workspace", "current"
+  };
   inline constexpr std::array kMsgWindowSwitcherPositionals{
       Positional{"action", {}, kMsgWindowSwitcherActionChoices, false, false, false},
+      Positional{"scope", {}, kMsgWindowSwitcherScopeChoices, false, false, false},
   };
   inline constexpr std::array kMsgWorkspaceAlertAddPositionals{
       Positional{"workspace", {}, {}, true, false, false},
@@ -573,6 +582,8 @@ namespace noctalia::cli {
                                               false};
     inline constexpr Command osdDisable{"osd-disable", "Disable OSD popups", {}, {}, {}, {}, {}, false};
     inline constexpr Command osdEnable{"osd-enable", "Enable OSD popups", {}, {}, {}, {}, {}, false};
+    inline constexpr Command osdShow{"osd-show", "Show a custom OSD popup", {}, {},
+                                     {},         kMsgOsdShowPositionals,    {}, false};
     inline constexpr Command osdToggle{"osd-toggle", "Toggle OSD popups", {}, {}, {}, {}, {}, false};
     inline constexpr Command panelClose{
         "panel-close",
@@ -644,6 +655,9 @@ namespace noctalia::cli {
     };
     inline constexpr Command screenshotRegion{
         "screenshot-region", "Start an interactive region screenshot", {}, {}, {}, {}, {}, false
+    };
+    inline constexpr Command screenshotWindow{
+        "screenshot-window", "Capture the focused window", {}, {}, {}, {}, {}, false
     };
     inline constexpr Command session{"session", "Run a built-in session action", {}, {},
                                      {},        kMsgSessionPositionals,          {}, false};
@@ -900,6 +914,7 @@ namespace noctalia::cli {
       msg::notificationShow,
       msg::osdDisable,
       msg::osdEnable,
+      msg::osdShow,
       msg::osdToggle,
       msg::panelClose,
       msg::panelOpen,
@@ -911,6 +926,7 @@ namespace noctalia::cli {
       msg::screenshotAnnotate,
       msg::screenshotFullscreen,
       msg::screenshotRegion,
+      msg::screenshotWindow,
       msg::session,
       msg::settingsClose,
       msg::settingsOpen,

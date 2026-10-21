@@ -506,15 +506,15 @@ namespace ui {
       static const std::unordered_set<std::string> kToggle = {"width",   "height",  "flexGrow", "opacity",
                                                               "visible", "checked", "enabled",  "onChange"};
       static const std::unordered_set<std::string> kScroll = {
-          "width",    "height", "flexGrow",    "opacity",       "visible",  "fill",
-          "radius",   "border", "borderWidth", "gap",           "padding",  "paddingH",
-          "paddingV", "align",  "justify",     "stickToBottom", "onScroll", "scrollToBottomRev"
+          "width",   "height",        "flexGrow", "opacity",           "visible",  "fill",     "radius",
+          "border",  "borderWidth",   "gap",      "padding",           "paddingH", "paddingV", "align",
+          "justify", "stickToBottom", "onScroll", "scrollToBottomRev", "revealKey"
       };
       static const std::unordered_set<std::string> kDragSource = {
-          "width",   "height",   "flexGrow",    "opacity",         "visible",       "gap",
-          "padding", "paddingH", "paddingV",    "align",           "justify",       "fill",
-          "radius",  "border",   "borderWidth", "minWidth",        "minHeight",     "dragType",
-          "payload", "enabled",  "tooltip",     "previewAncestor", "liftFromLayout"
+          "width",           "height",         "flexGrow",   "opacity",  "visible", "gap",     "padding",
+          "paddingH",        "paddingV",       "align",      "justify",  "fill",    "radius",  "border",
+          "borderWidth",     "minWidth",       "minHeight",  "dragType", "payload", "enabled", "tooltip",
+          "previewAncestor", "liftFromLayout", "grabCursor", "onClick"
       };
       static const std::unordered_set<std::string> kDropZone = {
           "width",     "height",  "flexGrow", "opacity", "visible",   "gap",     "padding",      "paddingH",
@@ -592,6 +592,7 @@ namespace ui {
     std::string pointerStreamKey;         // coalescing stream shared by this graph's pointer callbacks
     std::string imagePath;                // last-applied resolved image source
     std::string lastText;                 // markdown source cache - setMarkdown re-parses, only call on change
+    std::string revealKey;                // last-applied scroll revealKey, empty while no child carries it
     float lastMarkdownScale = 0.0F;       // content scale baked into the parsed markdown
     float lastMarkdownFontScale = 0.0F;   // text-only multiplier baked into the parsed markdown
     float imageTargetSize = 0.0F;
@@ -633,6 +634,8 @@ namespace ui {
 
   void UiTreeReconciler::setDragDropOverlayRoot(Node* root) { m_dragDropController->setOverlayRoot(root); }
 
+  void UiTreeReconciler::cancelDragDrop() { m_dragDropController->cancel(); }
+
   bool UiTreeReconciler::reconcile(Flex& host, const UiTreeNode& tree, Renderer& renderer) {
     std::vector<UiTreeNode> desired;
     desired.push_back(tree); // single root child of the host container
@@ -651,7 +654,7 @@ namespace ui {
 
   std::unique_ptr<Node> UiTreeReconciler::createControl(const UiTreeNode& desired) {
     if (isDragDropType(desired.type) && !m_dragDropEnabled) {
-      kLog.error("ui tree: '{}' is only supported in plugin panels; node skipped", desired.type);
+      kLog.error("ui tree: '{}' is only supported in plugin panels and bar widgets; node skipped", desired.type);
       return nullptr;
     }
     // ui.* flex containers default to stretching children across the cross axis
@@ -857,8 +860,44 @@ namespace ui {
       } else if (container != nullptr && want.children.empty() && !slot.children.empty()) {
         structureChanged |= syncChildren(*container, slot.children, {}, renderer);
       }
+      if (want.type == "scroll" && slot.node != nullptr) {
+        syncScrollReveal(slot, want);
+      }
     }
     return structureChanged;
+  }
+
+  const UiTreeReconciler::Slot*
+  UiTreeReconciler::findKeyedSlot(const std::vector<Slot>& slots, const std::string& key) {
+    for (const auto& slot : slots) {
+      if (slot.key == key) {
+        return &slot;
+      }
+      if (const Slot* match = findKeyedSlot(slot.children, key)) {
+        return match;
+      }
+    }
+    return nullptr;
+  }
+
+  void UiTreeReconciler::syncScrollReveal(Slot& slot, const UiTreeNode& desired) {
+    const std::string* revealKey = strProp(desired, "revealKey");
+    if (revealKey == nullptr || revealKey->empty()) {
+      slot.revealKey.clear();
+      return;
+    }
+    // Looked up before the unchanged check, so a key whose child is missing is
+    // forgotten and the reveal lands on the render that adds or restores it.
+    const Slot* target = findKeyedSlot(slot.children, *revealKey);
+    if (target == nullptr) {
+      slot.revealKey.clear();
+      return;
+    }
+    if (*revealKey == slot.revealKey) {
+      return;
+    }
+    slot.revealKey = *revealKey;
+    static_cast<ScrollView*>(slot.node)->requestScrollIntoView(target->node);
   }
 
   void UiTreeReconciler::syncWrapperCallbacks(Slot& slot, const UiTreeNode& desired, Node* node) {
@@ -1129,6 +1168,24 @@ namespace ui {
         warnMistypedOptionalProp(desired, "liftFromLayout", "a boolean");
       }
       source->setLiftFromLayout(liftFromLayout != nullptr && *liftFromLayout);
+      const bool* grabCursor = boolProp(desired, "grabCursor");
+      if (grabCursor == nullptr) {
+        warnMistypedOptionalProp(desired, "grabCursor", "a boolean");
+      }
+      source->setGrabCursor(grabCursor == nullptr || *grabCursor);
+      if (const std::string* onClick = callbackProp(desired, "onClick"); onClick != nullptr) {
+        if (*onClick != slot.callbackName) {
+          slot.callbackName = *onClick;
+          source->setOnClick([this, name = slot.callbackName]() {
+            if (m_sink) {
+              m_sink(ControlCallback{name});
+            }
+          });
+        }
+      } else if (!slot.callbackName.empty()) {
+        slot.callbackName.clear();
+        source->setOnClick(nullptr);
+      }
     } else if (desired.type == "drop_zone") {
       auto* zone = static_cast<DropZone*>(node);
       if (auto error = validateDragDropProps(desired)) {
@@ -1236,8 +1293,12 @@ namespace ui {
         flex->setMinHeight(scaled(*minHeight));
       }
       if (width != nullptr) {
-        flex->setMinWidth(scaled(*width));
-        flex->setMaxWidth(scaled(*width));
+        if (desired.type == "drop_zone") {
+          static_cast<DropZone*>(node)->setCollapsedWidth(scaled(*width));
+        } else {
+          flex->setMinWidth(scaled(*width));
+          flex->setMaxWidth(scaled(*width));
+        }
       }
       if (height != nullptr) {
         if (desired.type == "drop_zone") {

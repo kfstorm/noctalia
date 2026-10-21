@@ -98,7 +98,8 @@ private:
       const std::optional<network_enterprise::EnterpriseCredentials>& credentials = std::nullopt
   );
   void watchPendingAccessPointActivation(
-      const std::string& ssid, const std::string& connectionPath, const std::string& activePath
+      const std::string& ssid, const std::string& devicePath, const std::string& connectionPath,
+      const std::string& activePath
   );
   void handlePendingAccessPointActivationState(const std::string& activePath, std::uint32_t state);
   void persistConnectionToDisk(const std::string& connectionPath, const std::string& ssid);
@@ -170,6 +171,7 @@ private:
   Timer m_scanTimeoutTimer;
   std::uint64_t m_scanGeneration = 0;
   std::optional<bool> m_pendingLocalWirelessEnabled;
+  std::vector<std::shared_ptr<WirelessEnabledCompletion>> m_pendingWirelessCompletions;
   bool m_hasStateSnapshot = false;
   ChangeCallback m_changeCallback;
 

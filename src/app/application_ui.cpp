@@ -134,7 +134,7 @@ void Application::initUi() {
 void Application::initUiRenderSurfacesAndSettings() {
 
   m_renderContext.initialize(m_glShared);
-  m_renderContext.setGraphicsResetCallback([this](RenderGraphicsResetStatus status) { onGraphicsReset(status); });
+  m_glShared.setGraphicsResetCallback([this](RenderGraphicsResetStatus status) { onGraphicsReset(status); });
   if (!m_glShared.hasSharedContext()) {
     m_asyncTextureCache.setMakeCurrentCallback([this]() { m_renderContext.backend().makeCurrentNoSurface(); });
   }
@@ -148,6 +148,7 @@ void Application::initUiRenderSurfacesAndSettings() {
       &m_compositorPlatform, m_accountsService.get()
   );
   m_settingsWindow.setPluginManager(&m_pluginManager);
+  m_settingsWindow.setPluginRecommendations(&m_pluginRecommendations);
   m_settingsWindow.setIpcService(&m_ipcService);
   m_settingsWindow.setAsyncTextureCache(&m_asyncTextureCache);
   m_settingsWindow.setOpenDesktopWidgetEditor([this]() {
@@ -351,7 +352,6 @@ void Application::initLockScreenAndSession() {
         if (m_screenSaverService != nullptr) {
           m_screenSaverService->emitActiveChanged(true);
         }
-        releaseSleepDelayInhibitIfPending();
       },
       [this]() {
         m_idleGraceOverlay.hide();
@@ -373,8 +373,10 @@ void Application::initLockScreenAndSession() {
         m_lockscreenWidgetsController.onLockStateChanged();
         releaseSleepDelayInhibitIfPending();
         requestAllSurfacesRedraw();
-      }
+      },
+      [this]() { releaseSleepDelayInhibitIfPending(); }
   );
+  m_compositorPlatform.setOutputPowerChangeCallback([this]() { m_lockScreen.onOutputPowerChanged(); });
   if (m_logindService != nullptr) {
     m_logindService->setSessionLockIntegrationEnabled(m_configService.isLockScreenEnabled());
     m_logindService->setLockBeforeSuspendEnabled(m_configService.shouldLockBeforeSuspend());
@@ -435,6 +437,9 @@ void Application::initInputDispatch() {
     if (m_screenshotService.onPointerEvent(event)) {
       return;
     }
+    if (m_pluginLayerHost.onPointerEvent(event)) {
+      return;
+    }
     if (m_lockscreenWidgetsController.onPointerEvent(event)) {
       return;
     }
@@ -467,6 +472,7 @@ void Application::initInputDispatch() {
   });
   m_wayland.setKeyboardModifiersCallback([this](std::uint32_t modifiers) {
     m_windowSwitcher.onKeyboardModifiers(modifiers);
+    m_screenshotService.onModifiersChanged();
   });
   m_wayland.setKeyboardEventCallback([this](const KeyboardEvent& event) {
     if (m_lockScreen.isActive()) {
@@ -502,6 +508,9 @@ void Application::initInputDispatch() {
     }
     if (m_desktopWidgetsController.isEditing()) {
       m_desktopWidgetsController.onKeyboardEvent(event);
+      return;
+    }
+    if (m_pluginLayerHost.onKeyboardEvent(event)) {
       return;
     }
     if (m_settingsWindow.ownsKeyboardSurface(m_wayland.lastKeyboardSurface())) {
@@ -629,7 +638,8 @@ void Application::initPanelManagerAndPanels() {
   ControlCenterPanel* controlCenterPanelPtr = controlCenterPanel.get();
   m_panelManager.registerPanel("control-center", std::move(controlCenterPanel));
   {
-    auto launcherPanel = std::make_unique<LauncherPanel>(&m_configService, &m_asyncTextureCache);
+    auto launcherPanel =
+        std::make_unique<LauncherPanel>(&m_configService, m_accountsService.get(), &m_asyncTextureCache);
     launcherPanel->addProvider(std::make_unique<AppProvider>(&m_configService, &m_compositorPlatform));
     launcherPanel->addProvider(std::make_unique<WallpaperProvider>(&m_configService, &m_wayland, &m_themeService));
     launcherPanel->addProvider(std::make_unique<WindowProvider>(&m_compositorPlatform));
@@ -658,7 +668,7 @@ void Application::initPanelManagerAndPanels() {
   m_configService.addReloadCallback(
       [this]() {
         if (m_launcherPanel != nullptr) {
-          m_launcherPanel->syncUsageTrackingState();
+          m_launcherPanel->syncUsageOrderingState();
         }
       },
       "launcher-usage"
@@ -682,6 +692,8 @@ void Application::initPanelManagerAndPanels() {
   reloadPluginLauncherProviders();
   reloadDmenuProviders();
   reloadPluginPanels();
+  reloadPluginLayers();
+  m_configService.addReloadCallback([this]() { m_pluginLayerHost.onConfigReload(); });
   m_overviewLauncherCapture.initialize(m_wayland, &m_renderContext, m_compositorPlatform, m_panelManager);
   m_overviewLauncherCapture.setEnabled(overviewTypeToLaunchEnabled(m_configService));
   m_overviewLauncherCapture.setOpenLauncherCallback(
@@ -765,8 +777,17 @@ void Application::initNotificationAndOsd() {
   );
   m_configService.addReloadCallback([this]() { m_windowSwitcher.onConfigReload(); });
   m_configService.addReloadCallback([this]() { m_osdOverlay.onConfigReload(); });
+  m_scriptApi.setShowOsdHook(
+      [this](const std::string& icon, const std::string& value, std::optional<double> progress, bool inactive) {
+        m_osdOverlay.show(customOsdContent(icon, value, progress, inactive));
+      }
+  );
   m_idleGraceOverlay.initialize(m_wayland, &m_renderContext);
-  m_wayland.setIdleCapabilitiesReadyCallback([this]() { m_idleManager.reload(m_configService.config().idle); });
+  m_pluginIdleWatches.initialize(m_wayland);
+  m_wayland.setIdleCapabilitiesReadyCallback([this]() {
+    m_idleManager.reload(m_configService.config().idle);
+    m_pluginIdleWatches.onCapabilitiesReady();
+  });
   m_idleManager.initialize(
       m_wayland,
       [this](
@@ -813,8 +834,10 @@ void Application::initNotificationAndOsd() {
     if (m_screenSaverService->active()) {
       m_screenSaverService->setChangeCallback([this](std::int64_t locks) {
         m_idleManager.setScreenSaverInhibitLocks(locks);
+        m_pluginIdleWatches.setScreenSaverInhibited(locks > 0);
       });
       m_idleManager.setScreenSaverInhibitLocks(m_screenSaverService->inhibitLocks());
+      m_pluginIdleWatches.setScreenSaverInhibited(m_screenSaverService->inhibitLocks() > 0);
     } else {
       m_screenSaverService.reset();
     }

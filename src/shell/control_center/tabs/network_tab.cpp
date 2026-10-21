@@ -758,6 +758,7 @@ std::unique_ptr<Flex> NetworkTab::create() {
           .out = &m_identityInput,
           .placeholder = i18n::tr("control-center.network.identity"),
           .surfaceOpacity = panelCardOpacity(),
+          .surfaceRole = ColorRole::Surface,
           .onSubmit = submitFromForm,
       })
   );
@@ -767,6 +768,7 @@ std::unique_ptr<Flex> NetworkTab::create() {
           .out = &m_anonymousIdentityInput,
           .placeholder = i18n::tr("control-center.network.anonymous-identity"),
           .surfaceOpacity = panelCardOpacity(),
+          .surfaceRole = ColorRole::Surface,
           .onSubmit = submitFromForm,
       })
   );
@@ -776,6 +778,7 @@ std::unique_ptr<Flex> NetworkTab::create() {
           .out = &m_domainMatchInput,
           .placeholder = i18n::tr("control-center.network.domain-suffix-match"),
           .surfaceOpacity = panelCardOpacity(),
+          .surfaceRole = ColorRole::Surface,
           .onSubmit = submitFromForm,
       })
   );
@@ -785,6 +788,7 @@ std::unique_ptr<Flex> NetworkTab::create() {
           .out = &m_caCertInput,
           .placeholder = i18n::tr("control-center.network.ca-certificate"),
           .surfaceOpacity = panelCardOpacity(),
+          .surfaceRole = ColorRole::Surface,
           .onSubmit = submitFromForm,
       })
   );
@@ -798,6 +802,7 @@ std::unique_ptr<Flex> NetworkTab::create() {
           .placeholder = i18n::tr("control-center.network.password"),
           .passwordMode = true,
           .surfaceOpacity = panelCardOpacity(),
+          .surfaceRole = ColorRole::Surface,
           .flexGrow = 1.0F,
           .onSubmit = [this](const std::string& value) { submitPasswordPrompt(value); },
       }),
@@ -815,10 +820,10 @@ std::unique_ptr<Flex> NetworkTab::create() {
                 if (m_passwordInput == nullptr) {
                   return;
                 }
-                m_passwordRevealed = !m_passwordRevealed;
-                m_passwordInput->setPasswordMode(!m_passwordRevealed);
+                const bool revealed = !m_passwordInput->passwordRevealed();
+                m_passwordInput->setPasswordRevealed(revealed);
                 if (m_passwordRevealButton != nullptr) {
-                  m_passwordRevealButton->setGlyph(m_passwordRevealed ? "eye-off" : "eye");
+                  m_passwordRevealButton->setGlyph(revealed ? "eye-off" : "eye");
                 }
               },
       }),
@@ -896,6 +901,7 @@ void NetworkTab::doLayout(Renderer& renderer, float contentWidth, float bodyHeig
 
 void NetworkTab::doUpdate(Renderer& renderer) {
   syncPasswordCard();
+  focusPendingPasswordPrompt();
   rebuildApList(renderer);
   // A signal percent's text changes its width, so the list has to be laid out again.
   bool listChanged = syncApRows();
@@ -915,7 +921,6 @@ void NetworkTab::onClose() {
   m_passwordTitle = nullptr;
   m_passwordInput = nullptr;
   m_passwordRevealButton = nullptr;
-  m_passwordRevealed = false;
   m_enterpriseFields = nullptr;
   m_eapSelect = nullptr;
   m_phase2Select = nullptr;
@@ -970,6 +975,17 @@ void NetworkTab::syncPasswordCard() {
     } else {
       m_passwordTitle->setText(i18n::tr("control-center.network.password-prompt-for", "ssid", m_pendingSsid));
     }
+  }
+}
+
+void NetworkTab::focusPendingPasswordPrompt() {
+  if (!std::exchange(m_focusPasswordPrompt, false) || !m_hasPendingSecret) {
+    return;
+  }
+  // The enterprise form starts with the identity; a plain prompt only has the password.
+  Input* target = m_pendingEnterprise ? m_identityInput : m_passwordInput;
+  if (target != nullptr) {
+    PanelManager::instance().focusArea(target->inputArea());
   }
 }
 
@@ -1031,6 +1047,7 @@ void NetworkTab::showPasswordPrompt(const NetworkSecretAgent::SecretRequest& req
   // NM is asking for one secret against a profile it already holds, so only the
   // password is missing; the rest of the 802.1X form would have nothing to fill.
   m_pendingEnterprise = false;
+  m_focusPasswordPrompt = m_active;
   PanelManager::instance().requestLayout();
 }
 
@@ -1040,6 +1057,7 @@ void NetworkTab::showPasswordPrompt(const AccessPointInfo& ap) {
   m_pendingSsid = ap.ssid;
   m_pendingAccessPoint = ap;
   m_pendingEnterprise = ap.isEnterprise();
+  m_focusPasswordPrompt = m_active;
   if (m_pendingEnterprise) {
     // Say up front when this network cannot be joined with a password, rather
     // than after the user has filled in the whole form.
@@ -1098,10 +1116,9 @@ void NetworkTab::clearPasswordPrompt() {
   m_pendingEnterprise = false;
   m_pendingSsid.clear();
   m_pendingAccessPoint.reset();
-  m_passwordRevealed = false;
   if (m_passwordInput != nullptr) {
     m_passwordInput->setValue("");
-    m_passwordInput->setPasswordMode(true);
+    m_passwordInput->setPasswordRevealed(false);
   }
   if (m_passwordRevealButton != nullptr) {
     m_passwordRevealButton->setGlyph("eye");

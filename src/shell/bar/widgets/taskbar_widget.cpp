@@ -714,6 +714,12 @@ void TaskbarWidget::applyPinnedMerge(std::vector<TaskModel>& tasks) {
   tasks = std::move(merged);
 }
 
+void TaskbarWidget::dropUnpinnedTasks(std::vector<TaskModel>& tasks, bool showRunning) {
+  if (!showRunning) {
+    std::erase_if(tasks, [](const TaskModel& task) { return !task.pinned; });
+  }
+}
+
 void TaskbarWidget::create() {
   auto container = ui::inputArea({});
 
@@ -2724,6 +2730,22 @@ void TaskbarWidget::updateModels() {
     }
   }
 
+  if (!m_configOptions.hiddenWorkspaces.empty() && !nextWorkspaces.empty()) {
+    const auto& hiddenNames = m_configOptions.hiddenWorkspaces;
+    // Hidden workspaces still show while active, so switching to one keeps its windows visible.
+    const auto isHidden = [&hiddenNames](const WorkspaceModel& wsm) {
+      return !wsm.workspace.active
+          && !wsm.workspace.name.empty()
+          && std::ranges::find(hiddenNames, wsm.workspace.name) != hiddenNames.end();
+    };
+    std::erase_if(nextTasks, [&](const TaskModel& t) {
+      return std::ranges::any_of(nextWorkspaces, [&](const WorkspaceModel& wsm) {
+        return isHidden(wsm) && taskInWorkspaceGroup(t, wsm);
+      });
+    });
+    std::erase_if(nextWorkspaces, isHidden);
+  }
+
   if (m_onlyActiveWorkspace && !nextWorkspaces.empty()) {
     std::unordered_set<std::string> activeKeys;
     activeKeys.reserve(nextWorkspaces.size() * 3);
@@ -2778,6 +2800,7 @@ void TaskbarWidget::updateModels() {
       return a.handleKey < b.handleKey;
     });
     applyPinnedMerge(nextTasks);
+    dropUnpinnedTasks(nextTasks, m_configOptions.showRunning);
   }
 
   const ModelComparison comparison =
@@ -3490,7 +3513,7 @@ ColorSpec TaskbarWidget::workspaceTextColor(const WorkspaceModel& model) const {
     return m_occupiedColor;
   }
 
-  ColorSpec color = widgetForegroundOr(colorSpecFromRole(ColorRole::OnSurfaceVariant));
+  ColorSpec color = m_emptyColor;
   color.alpha *= 0.55F;
   return color;
 }
