@@ -1272,8 +1272,9 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
   float panelX = std::round((sw - panelWidth) * 0.5F);
   float panelY = std::max(Style::spaceLg, sh - panelHeight - 84.0F);
   if (m_config != nullptr) {
-    if (const DesktopWidgetState* loginBox =
-            lockscreen_login_box::findForOutput(m_config->config().lockscreenWidgets.widgets, m_outputKey);
+    if (const DesktopWidgetState* loginBox = lockscreen_login_box::findForOutput(
+            m_config->config().lockscreenWidgets.widgets, m_connection.outputs(), m_outputKey
+        );
         loginBox != nullptr) {
       float cx = loginBox->cx;
       float cy = loginBox->cy;
@@ -1669,10 +1670,19 @@ void LockSurface::rebuildSessionButtons() {
   }
 
   const auto actions = resolveSessionActions();
+  const bool showShortcuts = m_config == nullptr || m_config->config().shell.session.showShortcuts;
+  std::vector<std::string> badges;
+  badges.reserve(actions.size());
   std::vector<std::string> keys;
   keys.reserve(actions.size());
   for (const auto& action : actions) {
-    keys.push_back(action.action + "|" + (action.label.value_or("")) + "|" + (action.glyph.value_or("")));
+    badges.push_back(
+        showShortcuts && action.lockscreenShortcut.has_value() ? keyChordDisplayLabel(*action.lockscreenShortcut)
+                                                               : std::string{}
+    );
+    keys.push_back(
+        action.action + "|" + (action.label.value_or("")) + "|" + (action.glyph.value_or("")) + "|" + badges.back()
+    );
   }
   if (keys == m_lastSessionActionKeys && !m_sessionButtons.empty()) {
     return;
@@ -1688,7 +1698,8 @@ void LockSurface::rebuildSessionButtons() {
     return;
   }
 
-  for (const auto& cfg : actions) {
+  for (std::size_t i = 0; i < actions.size(); ++i) {
+    const auto& cfg = actions[i];
     const std::string_view labelKey =
         cfg.action == "lock_and_suspend" ? session_action::labelKey("suspend") : session_action::labelKey(cfg.action);
     const std::string labelText = cfg.label.has_value() && !cfg.label->empty() ? *cfg.label : i18n::tr(labelKey);
@@ -1714,11 +1725,20 @@ void LockSurface::rebuildSessionButtons() {
               }
             },
         .configure =
-            [](Button& control) {
+            [hint = badges[i]](Button& control) {
               control.setDirection(FlexDirection::Horizontal);
               control.setAlign(FlexAlign::Center);
               control.setJustify(FlexJustify::Center);
               control.setFillHeight(true);
+              // An inline trailing hint, not the corner badge: these buttons are too
+              // compact for an overlay, which would cover the centered label.
+              if (!hint.empty()) {
+                auto hintLabel = std::make_unique<Label>();
+                hintLabel->setText(hint);
+                hintLabel->setFontSize(Style::fontSizeCaption * 0.85F);
+                hintLabel->setOpacity(0.6F);
+                control.addChild(std::move(hintLabel));
+              }
             },
     });
     m_sessionButtons.push_back(button.get());
@@ -1867,8 +1887,9 @@ lockscreen_login_box::LoginBoxStyle LockSurface::resolveLoginStyle() const {
   if (m_config == nullptr) {
     return lockscreen_login_box::LoginBoxStyle{};
   }
-  if (const DesktopWidgetState* loginBox =
-          lockscreen_login_box::findForOutput(m_config->config().lockscreenWidgets.widgets, m_outputKey);
+  if (const DesktopWidgetState* loginBox = lockscreen_login_box::findForOutput(
+          m_config->config().lockscreenWidgets.widgets, m_connection.outputs(), m_outputKey
+      );
       loginBox != nullptr) {
     return lockscreen_login_box::resolveStyle(loginBox->settings);
   }
@@ -1879,8 +1900,9 @@ bool LockSurface::isLoginBoxEnabled() const {
   if (m_config == nullptr) {
     return true;
   }
-  if (const DesktopWidgetState* loginBox =
-          lockscreen_login_box::findForOutput(m_config->config().lockscreenWidgets.widgets, m_outputKey);
+  if (const DesktopWidgetState* loginBox = lockscreen_login_box::findForOutput(
+          m_config->config().lockscreenWidgets.widgets, m_connection.outputs(), m_outputKey
+      );
       loginBox != nullptr) {
     return loginBox->enabled;
   }

@@ -44,6 +44,10 @@ struct BarCapsuleGroupStyle {
   // Collapse the group to its first member; hovering the capsule reveals the rest inline.
   bool accordion = false;
   BarAccordionDirection accordionDirection = BarAccordionDirection::End;
+  // Unfold animation time in milliseconds; unset means the default (Style::animNormal).
+  std::optional<std::int32_t> accordionDurationMs;
+  // Hover time in milliseconds before unfolding starts; unset/0 reacts at once.
+  std::optional<std::int32_t> accordionDelayMs;
   // Gap between members inside the capsule, in logical pixels; unset inherits the bar's widget_spacing.
   std::optional<std::int32_t> widgetSpacing;
 
@@ -59,6 +63,7 @@ inline constexpr std::string_view kCapsuleGroupTokenPrefix = "group:";
 
 struct BarDeadZoneOverride {
   std::optional<std::unordered_map<std::string, std::string>> actions;
+  std::optional<bool> clickThrough;
 
   bool operator==(const BarDeadZoneOverride&) const = default;
 };
@@ -126,6 +131,9 @@ struct BarDeadZoneConfig {
   // Gesture -> action bindings for the parts of the bar no widget covers. Same grammar as widget
   // actions; see widget_action.h.
   std::unordered_map<std::string, std::string> actions;
+  // Shrink the bar's input region to its widget sections so clicks on the rest of the bar reach
+  // the window below. The dead zone then takes no input, so its actions never fire.
+  bool clickThrough = false;
 
   bool operator==(const BarDeadZoneConfig&) const = default;
 };
@@ -236,6 +244,8 @@ struct SessionPanelActionConfig {
   std::optional<std::string> glyph = std::nullopt;
   SessionActionButtonVariant variant = SessionActionButtonVariant::Default;
   std::optional<KeyChord> shortcut = std::nullopt;
+  // Lock-screen trigger. Never a text-producing key: the password field owns those.
+  std::optional<KeyChord> lockscreenShortcut = std::nullopt;
   /// When > 0, the action arms a countdown (seconds) before running; activate again to confirm immediately.
   double countdownSeconds = 0.0;
 
@@ -397,6 +407,10 @@ struct WidgetBarCapsuleSpec {
   // Accordion mode (capsule groups only): collapse to the first member; hover expands.
   bool accordion = false;
   BarAccordionDirection accordionDirection = BarAccordionDirection::End;
+  // Accordion unfold animation time in milliseconds; unset means the default (Style::animNormal).
+  std::optional<float> accordionDurationMs;
+  // Accordion hover time in milliseconds before unfolding starts; unset/0 reacts at once.
+  std::optional<float> accordionDelayMs;
   // Gap between group members; unset inherits the bar's widget_spacing. Meaningless for single widgets.
   std::optional<float> widgetSpacing;
 
@@ -1092,6 +1106,21 @@ constexpr EnumOption<ScreenshotRegionModifier> kScreenshotRegionModifiers[] = {
     {ScreenshotRegionModifier::Shift, "shift", "settings.options.screenshot.region-modifier.shift"},
 };
 
+// File format for saved screenshots; clipboard copies and pipe commands always receive PNG.
+enum class ScreenshotFormat : std::uint8_t {
+  Png = 0,
+  Jpeg = 1,
+  Webp = 2,
+  Jxl = 3,
+};
+
+constexpr EnumOption<ScreenshotFormat> kScreenshotFormats[] = {
+    {ScreenshotFormat::Png, "png", "settings.options.screenshot.format.png"},
+    {ScreenshotFormat::Jpeg, "jpeg", "settings.options.screenshot.format.jpeg"},
+    {ScreenshotFormat::Webp, "webp", "settings.options.screenshot.format.webp"},
+    {ScreenshotFormat::Jxl, "jxl", "settings.options.screenshot.format.jxl"},
+};
+
 struct ShellConfig {
   struct AnimationConfig {
     bool enabled = true;
@@ -1122,8 +1151,11 @@ struct ShellConfig {
     PanelPlacement wallpaperPlacement = PanelPlacement::Attached;
     PanelPlacement sessionPlacement = PanelPlacement::Attached;
     PanelPlacement polkitPlacement = PanelPlacement::Floating;
-    // Floating screen position per panel (one of kPanelPositions). "auto" = bar-relative.
-    // Launcher/clipboard default to "center" (the historical center-screen behavior).
+    // Screen position per panel (one of kPanelPositions). Pins a floating panel to that
+    // screen position. An attached panel follows it only when the position lies on its
+    // bar's edge (e.g. bottom_right on a bottom bar aligns to the bar's right end); any
+    // other value keeps it bar-centered. Launcher/clipboard default to "center" (the
+    // historical center-screen behavior for their floating default).
     std::string launcherPosition = "center";
     std::string clipboardPosition = "center";
     std::string controlCenterPosition = "auto";
@@ -1257,7 +1289,13 @@ struct ShellConfig {
     std::string pipeCommand;
     std::string directory;       // empty = XDG Pictures directory
     std::string filenamePattern; // empty = screenshot_%Y%m%d_%H%M%S
+    ScreenshotFormat format = ScreenshotFormat::Png;
+    std::int32_t quality = 90; // 1..100; ignored for PNG, 100 = lossless WebP/JPEG XL
     ScreenshotRegionModifier regionModifier = ScreenshotRegionModifier::None;
+    float regionBorderWidth = 2.0F;
+    float regionDimOpacity = 0.65F;
+    bool showRegionHint = true;
+    bool showRegionDimensions = true;
 
     bool operator==(const ScreenshotConfig&) const = default;
   };
@@ -1314,6 +1352,8 @@ struct ShellConfig {
   bool niriOverviewTypeToLaunchEnabled = false;
   bool umbrielOverviewTypeToLaunchEnabled = false;
   bool umbrielAudioProviderEnabled = false;
+  bool niriOverviewCloseOnLaunchEnabled = false;
+  bool umbrielOverviewCloseOnLaunchEnabled = false;
   bool polkitAgent = false;
   PasswordMaskStyle passwordMaskStyle = PasswordMaskStyle::CircleFilled;
   /// Readline-style editing shortcuts in every text input (Ctrl+A moves to the start instead of selecting all).
@@ -1392,8 +1432,10 @@ struct CalendarConfig {
     std::string username;               // CalDAV login (caldav only)
     std::vector<std::string> calendars; // discovered collection ids; empty = all
     CalendarCredentialSource credentialSource = CalendarCredentialSource::SecretService; // CalDAV only
-    std::string passwordFile; // required for file-backed CalDAV credentials
-    std::string path;         // directory path for vdir/local accounts
+    std::string passwordFile;   // required for file-backed CalDAV credentials
+    std::string clientCertFile; // optional mTLS client certificate, PEM (caldav only)
+    std::string clientKeyFile;  // optional mTLS client key, PEM (caldav only)
+    std::string path;           // directory path for vdir/local accounts
 
     bool operator==(const Account&) const = default;
   };
@@ -1565,6 +1607,13 @@ struct BatteryConfig {
   std::vector<BatteryDeviceWarningThreshold> deviceThresholds;
 
   bool operator==(const BatteryConfig&) const = default;
+};
+
+struct BluetoothConfig {
+  // Connect paired, trusted devices when Bluetooth turns on, at startup, and after resume.
+  bool connectWhenEnabled = false;
+
+  bool operator==(const BluetoothConfig&) const = default;
 };
 
 struct KeybindsConfig {
@@ -1827,6 +1876,11 @@ struct ControlCenterConfig {
     bool operator==(const CalendarTabConfig&) const = default;
   };
 
+  struct MediaTabConfig {
+    bool showVisualizer = true;
+    bool operator==(const MediaTabConfig&) const = default;
+  };
+
   std::vector<ShortcutConfig> shortcuts;
   std::vector<std::string> hiddenTabs; // tab keys (see kTabs) the user has hidden; empty = all available shown
   ControlCenterSidebarMode sidebarMode = ControlCenterSidebarMode::Compact;
@@ -1834,7 +1888,9 @@ struct ControlCenterConfig {
   std::int32_t width = kDefaultWidth; // full-sidebar logical width; compact/none modes scale down from this
   bool showShortcutLabels = true;
   bool showSessionButton = true;
+  bool circularAvatar = true;
   CalendarTabConfig calendarTab;
+  MediaTabConfig mediaTab;
   bool operator==(const ControlCenterConfig&) const = default;
 };
 
@@ -1945,6 +2001,7 @@ struct Config {
   AudioConfig audio;
   BrightnessConfig brightness;
   BatteryConfig battery;
+  BluetoothConfig bluetooth;
   KeybindsConfig keybinds;
   NightLightConfig nightlight;
   LocationConfig location;
@@ -1976,6 +2033,7 @@ struct ConfigChangeSet {
   bool audio = true;
   bool brightness = true;
   bool battery = true;
+  bool bluetooth = true;
   bool keybinds = true;
   bool nightlight = true;
   bool location = true;
@@ -2006,6 +2064,7 @@ struct ConfigChangeSet {
         || audio
         || brightness
         || battery
+        || bluetooth
         || keybinds
         || nightlight
         || location
